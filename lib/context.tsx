@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { IPTVChannel, IPTVPlaylist, DEFAULT_CHANNELS, DEFAULT_PLAYLISTS } from "./default-playlists";
+import { WorldCupMatch } from "./match-data";
 
 interface Settings {
   theme: "gold" | "cyan" | "violet" | "emerald" | "minimal";
@@ -19,6 +20,7 @@ interface AppContextType {
   favorites: string[];
   recentlyWatched: IPTVChannel[];
   activeChannel: IPTVChannel | null;
+  activeMatch: WorldCupMatch | null;
   selectedPlaylistId: string; // "all" or playlist ID
   selectedCategory: string; // "All" or category name
   searchQuery: string;
@@ -32,6 +34,7 @@ interface AppContextType {
   toggleFavorite: (channelId: string) => void;
   addToRecentlyWatched: (channel: IPTVChannel) => void;
   setActiveChannel: (channel: IPTVChannel | null) => void;
+  setActiveMatch: (match: WorldCupMatch | null) => void;
   setSelectedPlaylistId: (id: string) => void;
   setSelectedCategory: (category: string) => void;
   setSearchQuery: (query: string) => void;
@@ -138,6 +141,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     })();
     return list.find(c => c.isFeatured) || list[0] || null;
   });
+
+  const [activeMatch, setActiveMatch] = useState<WorldCupMatch | null>(null);
 
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string>("all");
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
@@ -373,6 +378,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         favorites,
         recentlyWatched,
         activeChannel,
+        activeMatch,
         selectedPlaylistId,
         selectedCategory,
         searchQuery,
@@ -384,6 +390,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         toggleFavorite,
         addToRecentlyWatched,
         setActiveChannel,
+        setActiveMatch,
         setSelectedPlaylistId,
         setSelectedCategory,
         setSearchQuery,

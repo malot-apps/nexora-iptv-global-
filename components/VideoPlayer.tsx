@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import Hls from "hls.js";
 import { useApp } from "../lib/context";
 import { getThemeClasses } from "../lib/theme-helper";
+import { getBroadcastChannels } from "../lib/match-data";
 import { 
   Play, 
   Pause, 
@@ -29,7 +30,8 @@ export default function VideoPlayer() {
     setActiveChannel, 
     favorites, 
     toggleFavorite, 
-    settings 
+    settings,
+    activeMatch
   } = useApp();
 
   const theme = getThemeClasses(settings.theme);
@@ -67,14 +69,83 @@ export default function VideoPlayer() {
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Fallback and loading protection refs
+  const failedChannelsRef = useRef<Set<string>>(new Set());
+  const expectedFallbackIdRef = useRef<string | null>(null);
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerFallback = useCallback((errorReason: string) => {
+    if (!activeChannel) return;
+    
+    console.error(`[Nexora Player Debug] Stream failure on "${activeChannel.name}" (${activeChannel.id}). Error/Status: ${errorReason}`);
+    
+    // Add current channel to failed set
+    failedChannelsRef.current.add(activeChannel.id);
+    
+    // Find next channel in the current list
+    const currentIndex = channels.findIndex(c => c.id === activeChannel.id);
+    let nextChannel = null;
+    if (currentIndex !== -1 && channels.length > 1) {
+      for (let i = 1; i <= channels.length; i++) {
+        const nextIndex = (currentIndex + i) % channels.length;
+        const candidate = channels[nextIndex];
+        if (!failedChannelsRef.current.has(candidate.id)) {
+          nextChannel = candidate;
+          break;
+        }
+      }
+    }
+    
+    setIsStreamLoading(false);
+    
+    if (nextChannel) {
+      // Display friendly user-facing fallback message
+      setStreamError(`${errorReason}. Trying next stream (${nextChannel.name})...`);
+      
+      // Delay for 1.5 seconds to let user read the notice, then swap active channel
+      if (fallbackTimeoutRef.current) clearTimeout(fallbackTimeoutRef.current);
+      fallbackTimeoutRef.current = setTimeout(() => {
+        if (nextChannel) {
+          expectedFallbackIdRef.current = nextChannel.id;
+          setActiveChannel(nextChannel);
+        }
+      }, 1500);
+    } else {
+      // Checked all channels, none succeeded
+      setStreamError("This stream is currently unavailable.");
+    }
+  }, [activeChannel, channels, setActiveChannel]);
+
   // Initialize HLS and clean up
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !activeChannel) return;
 
+    // Check if this is a manual selection (not triggered by fallback)
+    if (activeChannel.id !== expectedFallbackIdRef.current) {
+      failedChannelsRef.current.clear();
+      expectedFallbackIdRef.current = null;
+    }
+
     setStreamError(null);
     setIsStreamLoading(true);
     setResolution("Auto (Detecting...)");
+
+    // Clear previous timeouts
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+    if (fallbackTimeoutRef.current) {
+      clearTimeout(fallbackTimeoutRef.current);
+      fallbackTimeoutRef.current = null;
+    }
+
+    // Set 10 seconds timeout for infinite loading protection
+    loadingTimeoutRef.current = setTimeout(() => {
+      triggerFallback("Connection timed out");
+    }, 10000);
     
     // Destroy previous instance
     if (hlsRef.current) {
@@ -100,6 +171,14 @@ export default function VideoPlayer() {
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+          loadingTimeoutRef.current = null;
+        }
+        // Successful stream resolved! Reset fallback tracking
+        failedChannelsRef.current.clear();
+        expectedFallbackIdRef.current = null;
+
         setIsStreamLoading(false);
         const levels = hls.levels.map(l => `${l.height}p`);
         setQualityLevels(["Auto", ...levels]);
@@ -122,11 +201,30 @@ export default function VideoPlayer() {
       });
 
       hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error("[Nexora HLS Error Debug]", data);
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              console.warn("Fatal network error in HLS playback. Attempting recovery...", data);
-              hls.startLoad();
+              const status = (data.response as any)?.status;
+              const isCORSOrBlocked = data.details === "manifestLoadTimeOut" || 
+                                      (data.details === "manifestLoadError" && (!status || status === 0));
+              
+              if (isCORSOrBlocked || status === 403 || status === 404) {
+                console.warn(`CORS / Network block detected (Status: ${status}). Swapping stream immediately.`);
+                if (loadingTimeoutRef.current) {
+                  clearTimeout(loadingTimeoutRef.current);
+                  loadingTimeoutRef.current = null;
+                }
+                let errorMsg = "Network error";
+                if (status === 403) errorMsg = "Access Forbidden (403)";
+                else if (status === 404) errorMsg = "Stream Not Found (404)";
+                else if (isCORSOrBlocked) errorMsg = "CORS restriction or connection blocked";
+                
+                triggerFallback(errorMsg);
+              } else {
+                console.warn("Fatal network error in HLS playback. Attempting recovery...", data);
+                hls.startLoad();
+              }
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
               console.warn("Fatal media error in HLS playback. Attempting recovery...", data);
@@ -134,9 +232,25 @@ export default function VideoPlayer() {
               break;
             default:
               console.error("Unrecoverable playback error:", data);
-              setStreamError("Unable to connect to live stream. The URL might be offline, expired, or require credentials.");
-              setIsStreamLoading(false);
+              if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+              }
+              triggerFallback("Fatal playback error");
               break;
+          }
+        } else {
+          // Check non-fatal manifest load or fragment parsing errors that might indicate persistent failures
+          if (data.details === "manifestLoadError" || data.details === "fragParsingError") {
+            const status = (data.response as any)?.status;
+            if (status === 403 || status === 404 || status === 0) {
+              console.warn(`Non-fatal error indicating blocked stream (Status: ${status}). Swapping stream.`);
+              if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+              }
+              triggerFallback(status === 403 ? "Forbidden (403)" : status === 404 ? "Not Found (404)" : "CORS / Access Blocked");
+            }
           }
         }
       });
@@ -159,27 +273,66 @@ export default function VideoPlayer() {
       }, 1000);
 
       return () => {
+        if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+        if (fallbackTimeoutRef.current) clearTimeout(fallbackTimeoutRef.current);
         clearInterval(interval);
         hls.destroy();
       };
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
       // For Safari native playback
       video.src = streamUrl;
-      video.addEventListener("loadedmetadata", () => {
+
+      const handleLoadedMetadata = () => {
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+          loadingTimeoutRef.current = null;
+        }
+        failedChannelsRef.current.clear();
+        expectedFallbackIdRef.current = null;
         setIsStreamLoading(false);
         if (settings.autoPlay) {
           video.play().then(() => setIsPlaying(true)).catch(() => {});
         }
-      });
-      video.addEventListener("error", () => {
-        setStreamError("Failed to load HLS stream natively.");
-        setIsStreamLoading(false);
-      });
+      };
+
+      const handleNativeError = (e: any) => {
+        console.error("Native HLS playback error:", e);
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+          loadingTimeoutRef.current = null;
+        }
+        let errorMsg = "Failed to load HLS stream natively";
+        if (video.error) {
+          if (video.error.code === 4) {
+            errorMsg = "Stream format not supported or CORS blocked (Code 4)";
+          } else if (video.error.code === 3) {
+            errorMsg = "Pipeline decoding error (Code 3)";
+          } else if (video.error.code === 2) {
+            errorMsg = "Network connection lost (Code 2)";
+          } else if (video.error.code === 1) {
+            errorMsg = "Loading aborted (Code 1)";
+          }
+        }
+        triggerFallback(errorMsg);
+      };
+
+      video.addEventListener("loadedmetadata", handleLoadedMetadata);
+      video.addEventListener("error", handleNativeError);
+
+      return () => {
+        if (loadingTimeoutRef.current) clearTimeout(loadingTimeoutRef.current);
+        if (fallbackTimeoutRef.current) clearTimeout(fallbackTimeoutRef.current);
+        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+        video.removeEventListener("error", handleNativeError);
+      };
     } else {
-      setStreamError("HLS playback is not supported in this browser engine.");
-      setIsStreamLoading(false);
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+      triggerFallback("HLS playback is not supported in this browser engine");
     }
-  }, [activeChannel, settings.lowLatency, settings.autoPlay]);
+  }, [activeChannel, settings.lowLatency, settings.autoPlay, triggerFallback]);
 
   // Handle Controls Visibility Timeout
   const triggerControlsVisibility = useCallback(() => {
@@ -303,6 +456,12 @@ export default function VideoPlayer() {
     return channels.filter(c => c.category === activeChannel.category);
   }, [activeChannel, channels]);
 
+  // Find broadcast channels for the current World Cup match (if any)
+  const broadcastChannels = React.useMemo(() => {
+    if (!activeMatch) return [];
+    return getBroadcastChannels(activeMatch, channels);
+  }, [activeMatch, channels]);
+
   if (!activeChannel) {
     return (
       <div className="flex flex-col items-center justify-center p-12 bg-[#111114] border border-white/5 rounded-3xl min-h-[450px]" id="empty-player-state">
@@ -318,14 +477,15 @@ export default function VideoPlayer() {
   const isFavorited = favorites.includes(activeChannel.id);
 
   return (
-    <div 
-      ref={containerRef}
-      onMouseMove={triggerControlsVisibility}
-      onMouseLeave={() => isPlaying && setShowControls(false)}
-      className="relative w-full overflow-hidden rounded-3xl border border-white/5 bg-black select-none aspect-video"
-      style={{ aspectRatio: customAspect === "cover" ? "auto" : customAspect }}
-      id="nexora-video-player-container"
-    >
+    <div className="space-y-6" id="video-player-root-wrapper">
+      <div 
+        ref={containerRef}
+        onMouseMove={triggerControlsVisibility}
+        onMouseLeave={() => isPlaying && setShowControls(false)}
+        className="relative w-full overflow-hidden rounded-3xl border border-white/5 bg-black select-none aspect-video"
+        style={{ aspectRatio: customAspect === "cover" ? "auto" : customAspect }}
+        id="nexora-video-player-container"
+      >
       
       {/* Dynamic Video Element */}
       <video
@@ -638,6 +798,83 @@ export default function VideoPlayer() {
           </div>
         </div>
       </div>
+    </div>
+
+      {/* MATCH SPECIFIC BROADCAST CHANNELS */}
+      {activeMatch && broadcastChannels.length > 0 && (
+        <section className="bg-zinc-950/40 border border-white/5 rounded-3xl p-5 md:p-6 space-y-4" id="match-broadcast-channels-section">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <Tv className={`h-5 w-5 ${theme.text}`} />
+              <div>
+                <h3 className="text-sm font-extrabold text-white uppercase tracking-wider">Available Broadcast Channels</h3>
+                <p className="text-[11px] text-zinc-500 mt-0.5">
+                  Currently broadcasting <span className="text-zinc-300 font-semibold">{activeMatch.teamA.name} vs {activeMatch.teamB.name}</span>. Switch instantly below.
+                </p>
+              </div>
+            </div>
+            
+            {/* Quick stats tag inside player */}
+            <div className="bg-white/5 px-2.5 py-1 rounded-xl border border-white/5 text-[10px] font-mono text-zinc-400">
+              Live Score: {activeMatch.teamA.score} - {activeMatch.teamB.score} ({activeMatch.minute ? `${activeMatch.minute}'` : "Live"})
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {broadcastChannels.map(chan => {
+              const isCurrent = chan.url === activeChannel.url;
+              return (
+                <div
+                  key={chan.id}
+                  onClick={() => {
+                    if (!isCurrent) {
+                      setActiveChannel(chan);
+                    }
+                  }}
+                  className={`relative p-3.5 rounded-2xl cursor-pointer transition-all border flex items-center space-x-3.5 ${
+                    isCurrent 
+                      ? "bg-indigo-500/10 border-indigo-500/50 shadow-lg shadow-indigo-950/30 ring-1 ring-indigo-500/20" 
+                      : "bg-[#111114] border-white/5 hover:border-zinc-800 hover:bg-[#15151a]"
+                  }`}
+                >
+                  <div className="relative shrink-0 h-10 w-14 bg-zinc-900 rounded-lg overflow-hidden border border-white/5 flex items-center justify-center">
+                    <img 
+                      src={chan.logo} 
+                      alt="" 
+                      className="max-h-full max-w-full object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${encodeURIComponent(chan.name)}/80/50`;
+                      }}
+                    />
+                    {isCurrent && (
+                      <div className="absolute inset-0 bg-indigo-500/20 flex items-center justify-center backdrop-blur-[1px]">
+                        <span className="h-2 w-2 rounded-full bg-indigo-400 animate-ping"></span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <p className={`text-xs font-black truncate ${isCurrent ? "text-indigo-400" : "text-zinc-200"}`}>
+                        {chan.name}
+                      </p>
+                      {isCurrent && <span className="text-[9px] font-mono font-bold text-indigo-400 uppercase tracking-widest animate-pulse">Playing</span>}
+                    </div>
+                    
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] text-zinc-500 font-mono">
+                      <span className="bg-white/5 px-1 rounded text-[9px] text-zinc-400">{chan.quality || "1080p UHD"}</span>
+                      <span>•</span>
+                      <span className="truncate max-w-[80px]" title={chan.language}>{chan.language || "English"}</span>
+                      <span>•</span>
+                      <span className="truncate max-w-[80px]" title={chan.country}>{chan.country || "Global"}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
     </div>
   );

@@ -72,7 +72,7 @@ export default function PlaylistImporter({ onSuccess }: PlaylistImporterProps) {
           const text = await response.text();
           
           addLog("File fetched successfully. Ingesting content stream...");
-          const parsedChannels = parseM3U(text, "custom");
+          const parsedChannels = parseM3U(text, "custom", playlistUrl);
           
           if (parsedChannels.length === 0) {
             throw new Error("No channels detected in the M3U content.");
@@ -83,40 +83,66 @@ export default function PlaylistImporter({ onSuccess }: PlaylistImporterProps) {
           setSuccessMsg(`Successfully imported "${finalName}" with ${parsedChannels.length} channels.`);
           setTimeout(onSuccess, 1500);
         } catch (fetchErr) {
-          addLog("Direct fetch blocked by CORS policy or timeout. Simulating smart server-side parsing fallback...");
-          addLog("Parsing demo stream list for preview testing...");
-          
-          // Generate realistic playlist for testing URL flow
-          const mockChannels = [
-            {
-              id: "parsed-ch-1",
-              name: `Imported Sports Hub ${Math.floor(Math.random() * 90) + 10}`,
-              logo: "https://picsum.photos/seed/parsed-sports/300/200",
-              url: "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
-              category: "Imported Sports",
-              playlistId: "temp"
-            },
-            {
-              id: "parsed-ch-2",
-              name: `Cinema Stream HD ${Math.floor(Math.random() * 90) + 10}`,
-              logo: "https://picsum.photos/seed/parsed-cinema/300/200",
-              url: "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
-              category: "Imported Cinema",
-              playlistId: "temp"
-            },
-            {
-              id: "parsed-ch-3",
-              name: `Music Chillout Loop`,
-              logo: "https://picsum.photos/seed/parsed-music/300/200",
-              url: "https://playertest.longtailvideo.com/adaptive/oceans/oceans.m3u8",
-              category: "Imported Chill",
-              playlistId: "temp"
+          addLog("Direct fetch blocked by CORS or timeout. Routing through secure server-side proxy...");
+          try {
+            const proxyRes = await fetch("/api/playlist/fetch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ urls: [playlistUrl], playlistId: "custom" })
+            });
+            if (!proxyRes.ok) throw new Error("Secure server proxy returned an error status");
+            const data = await proxyRes.json();
+            const parsedChannels = data.channels || [];
+            
+            if (parsedChannels.length === 0) {
+              throw new Error("No channels detected via server-side proxy.");
             }
-          ];
 
-          const playlistId = addPlaylist(finalName, "m3u", mockChannels as any);
-          setSuccessMsg(`Successfully imported "${finalName}" (Demo channels from simulated URL import).`);
-          setTimeout(onSuccess, 1500);
+            addLog(`Success! Parsed ${parsedChannels.length} stream channels via proxy.`);
+            addPlaylist(finalName, "m3u", parsedChannels);
+            setSuccessMsg(`Successfully imported "${finalName}" with ${parsedChannels.length} channels.`);
+            setTimeout(onSuccess, 1500);
+          } catch (proxyErr: any) {
+            addLog(`Server proxy failed: ${proxyErr.message || proxyErr}. Falling back to preview testing channels...`);
+            
+            // Generate realistic playlist for testing URL flow
+            const mockChannels = [
+              {
+                id: "parsed-ch-1",
+                name: `Imported Sports Hub ${Math.floor(Math.random() * 90) + 10}`,
+                logo: "https://picsum.photos/seed/parsed-sports/300/200",
+                url: "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
+                category: "Imported Sports",
+                playlistId: "temp",
+                country: "United States",
+                language: "English"
+              },
+              {
+                id: "parsed-ch-2",
+                name: `Cinema Stream HD ${Math.floor(Math.random() * 90) + 10}`,
+                logo: "https://picsum.photos/seed/parsed-cinema/300/200",
+                url: "https://bitdash-a.akamaihd.net/content/sintel/hls/playlist.m3u8",
+                category: "Imported Cinema",
+                playlistId: "temp",
+                country: "Global",
+                language: "English"
+              },
+              {
+                id: "parsed-ch-3",
+                name: `Music Chillout Loop`,
+                logo: "https://picsum.photos/seed/parsed-music/300/200",
+                url: "https://playertest.longtailvideo.com/adaptive/oceans/oceans.m3u8",
+                category: "Imported Chill",
+                playlistId: "temp",
+                country: "Global",
+                language: "English"
+              }
+            ];
+
+            const playlistId = addPlaylist(finalName, "m3u", mockChannels as any);
+            setSuccessMsg(`Successfully imported "${finalName}" (Demo channels from simulated URL import).`);
+            setTimeout(onSuccess, 1500);
+          }
         }
       } else if (activeMode === "file") {
         if (!m3uContent.trim()) throw new Error("Please upload or drag a valid M3U file");

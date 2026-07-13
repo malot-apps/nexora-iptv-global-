@@ -3,7 +3,7 @@ import { parseM3U } from "@/lib/iptv-parser";
 
 export async function POST(req: NextRequest) {
   try {
-    const { urls } = await req.json();
+    const { urls, playlistId = "automated" } = await req.json();
 
     if (!urls || !Array.isArray(urls)) {
       return NextResponse.json({ error: "Invalid or missing URLs array" }, { status: 400 });
@@ -33,8 +33,8 @@ export async function POST(req: NextRequest) {
           }
 
           const content = await response.text();
-          // Use "automated" as the parent playlist ID so parsed channels are tagged with it
-          const parsed = parseM3U(content, "automated");
+          // Use specified playlistId and pass URL for metadata inference
+          const parsed = parseM3U(content, playlistId, url);
           allChannels.push(...parsed);
         } catch (err: any) {
           console.warn(`Error processing playlist URL: ${url}`, err.message || err);
