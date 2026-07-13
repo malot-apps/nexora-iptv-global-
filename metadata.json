@@ -1,5 +1,5 @@
 {
-  "name": "Nexora",
+  "name": "Nexora IPTV Global",
   "description": "Nexora is a premium IPTV stream aggregator, playlist parser, and high-fidelity video player supporting M3U, M3U8, and Xtream playlists with categories, search, favorites, and recent history.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

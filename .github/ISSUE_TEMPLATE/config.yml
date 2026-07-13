@@ -1,0 +1,11 @@
+# Github Issue Template Configuration
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: 💬 Community Discussions
+    url: https://github.com/nexora-iptv/nexora-iptv-global/discussions
+    about: Ask questions, show off your custom Nexora themes, or chat with other stream managers.
+  - name: 🛡️ Security Vulnerabilities
+    url: https://github.com/nexora-iptv/nexora-iptv-global/blob/main/docs/SECURITY.md
+    about: If you have discovered a security issue, please read our Security Policy on how to report it privately.

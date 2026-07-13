@@ -1,0 +1,11 @@
+# Nexora IPTV Global Code Owners File
+# This file defines users or teams that are responsible for reviewing code in specific paths.
+
+# Default owners for all files in the repository
+*       @nexora-iptv/core-maintainers
+
+# Core state and IPTV parsing engine modifications
+/lib/   @nexora-iptv/core-engineers
+
+# Documentation updates
+/docs/  @nexora-iptv/docs-team
