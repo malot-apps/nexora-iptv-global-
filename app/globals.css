@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@theme {
+  --animate-aurora: aurora 25s ease infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-glow-pulse: glow-pulse 3s ease-in-out infinite;
+  --animate-spin-slow: spin 20s linear infinite;
+  --animate-orbit: orbit 15s linear infinite;
+  
+  @keyframes aurora {
+    0%, 100% { transform: translate(0px, 0px) scale(1); }
+    33% { transform: translate(40px, -60px) scale(1.2); }
+    66% { transform: translate(-30px, 40px) scale(0.85); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px) rotate(0deg); }
+    50% { transform: translateY(-10px) rotate(2deg); }
+  }
+  @keyframes glow-pulse {
+    0%, 100% { opacity: 0.3; filter: brightness(1); }
+    50% { opacity: 0.6; filter: brightness(1.3); }
+  }
+  @keyframes orbit {
+    0% { transform: rotate(0deg) translateX(40px) rotate(0deg); }
+    100% { transform: rotate(360deg) translateX(40px) rotate(-360deg); }
+  }
+}
+
+/* Custom scrollbar configurations */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Glassmorphism utility card */
+.glass-panel {
+  background: rgba(17, 17, 20, 0.7);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* 3D perspective setup */
+.perspective-1000 {
+  perspective: 1000px;
+}
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+.backface-hidden {
+  backface-visibility: hidden;
+}
+
