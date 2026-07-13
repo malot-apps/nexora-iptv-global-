@@ -139,7 +139,7 @@ export default function Home() {
       <div className="flex flex-1 relative max-w-7xl w-full mx-auto">
         
         {/* Left Side Navigation (Desktop Only) */}
-        <Sidebar onNavigate={handleNavigate} currentTab={currentTab} />
+        <Sidebar onNavigate={handleNavigate} currentTab={currentTab} className="hidden md:flex border-r border-white/5 bg-[#111114]" />
 
         {/* Right Main Content Body */}
         <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto max-h-[calc(100vh-4rem)] scrollbar-thin scrollbar-thumb-zinc-900">
@@ -230,7 +230,7 @@ export default function Home() {
             
             {/* Inline Sidebar navigation for mobile scroll */}
             <div className="flex-1 overflow-y-auto pr-1">
-              <Sidebar onNavigate={handleNavigate} currentTab={currentTab} />
+              <Sidebar onNavigate={handleNavigate} currentTab={currentTab} className="w-full bg-transparent p-0" />
             </div>
           </div>
         </div>
