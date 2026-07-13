@@ -14,6 +14,8 @@ export function parseM3U(content: string, playlistId: string): IPTVChannel[] {
     tvgId?: string;
     tvgName?: string;
     tvgLogo?: string;
+    country?: string;
+    language?: string;
   } | null = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -40,6 +42,14 @@ export function parseM3U(content: string, playlistId: string): IPTVChannel[] {
       if (groupMatch) {
         currentInfo.category = groupMatch[1];
       }
+
+      // Extract country
+      const countryMatch = line.match(/tvg-country="([^"]+)"/) || line.match(/country="([^"]+)"/);
+      if (countryMatch) currentInfo.country = countryMatch[1];
+
+      // Extract language
+      const languageMatch = line.match(/tvg-language="([^"]+)"/) || line.match(/language="([^"]+)"/);
+      if (languageMatch) currentInfo.language = languageMatch[1];
 
       // Extract name (usually the text after the last comma)
       const commaIndex = line.lastIndexOf(",");
@@ -73,7 +83,8 @@ export function parseM3U(content: string, playlistId: string): IPTVChannel[] {
           playlistId,
           isFeatured: false,
           quality: "HD",
-          language: "Unknown",
+          language: currentInfo.language || "Unknown",
+          country: currentInfo.country || "Global",
           views: Math.floor(Math.random() * 500) + 10,
           description: `Custom stream channel imported from playlist: ${name}. Category: ${category}.`
         });

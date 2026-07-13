@@ -42,10 +42,11 @@ function ChannelCard({
   const status = streamStatuses[chan.id] || "idle";
 
   useEffect(() => {
-    if (pingPermission && status === "idle") {
+    // Auto-validate status for automated channels, or generic channels if permission is granted
+    if ((pingPermission || chan.playlistId === "automated") && status === "idle") {
       checkChannelStatus(chan.id, chan.url);
     }
-  }, [pingPermission, status, chan.id, chan.url, checkChannelStatus]);
+  }, [pingPermission, status, chan.id, chan.url, checkChannelStatus, chan.playlistId]);
 
   return (
     <div
@@ -67,8 +68,8 @@ function ChannelCard({
         />
         {/* Glowing Streaming Indicator */}
         <div className="absolute top-2.5 left-2.5 flex items-center space-x-1.5 bg-black/60 backdrop-blur px-2 py-0.8 rounded-md border border-white/5 text-[9px] font-mono font-semibold tracking-wider text-emerald-400 uppercase">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>ONLINE</span>
+          <span className={`h-1.5 w-1.5 rounded-full ${status === "offline" ? "bg-red-500" : "bg-emerald-500 animate-pulse"}`}></span>
+          <span>{status === "live" ? "LIVE" : status === "checking" ? "CHECKING" : "ONLINE"}</span>
         </div>
 
         {/* Quality Overlay Badge */}
@@ -92,7 +93,7 @@ function ChannelCard({
               <h3 className="text-xs font-bold text-zinc-200 group-hover:text-white truncate">
                 {chan.name}
               </h3>
-              {pingPermission && (
+              {(pingPermission || chan.playlistId === "automated") && (
                 <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[8px] font-mono font-bold uppercase shrink-0 ${
                   status === "live"
                     ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
@@ -125,8 +126,8 @@ function ChannelCard({
 
       {/* Additional metrics */}
       <div className="flex items-center justify-between text-[9px] font-mono text-zinc-600 border-t border-white/5 mt-3 pt-2.5">
-        <span>Language: {chan.language || "Multi"}</span>
-        <span>{(chan.views || 250).toLocaleString()} viewers</span>
+        <span className="truncate mr-2">Country: {chan.country || "Global"}</span>
+        <span className="shrink-0">Lang: {chan.language || "Multi"}</span>
       </div>
     </div>
   );
@@ -139,22 +140,31 @@ interface DashboardViewProps {
 export default function DashboardView({ onNavigate }: DashboardViewProps) {
   const {
     channels,
+    playlists,
     favorites,
     toggleFavorite,
     recentlyWatched,
     setActiveChannel,
+    selectedPlaylistId,
+    setSelectedPlaylistId,
     selectedCategory,
     setSelectedCategory,
+    selectedCountry,
+    setSelectedCountry,
+    selectedLanguage,
+    setSelectedLanguage,
     searchQuery,
     setSearchQuery,
     settings,
     streamStatuses,
     checkChannelStatus,
-    updateSettings
+    updateSettings,
+    isRefreshingAutomated
   } = useApp();
 
   const theme = getThemeClasses(settings.theme);
   const [showConsentModal, setShowConsentModal] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(16);
 
   const handleTogglePingPermission = () => {
     if (!settings.pingPermission) {
@@ -169,15 +179,61 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
     setShowConsentModal(false);
   };
 
-  // Filter channels based on search and selected category
+  // Filter channels based on search, selected playlist, category, country, language
   const filteredChannels = React.useMemo(() => {
     return channels.filter(c => {
-      const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            c.category.toLowerCase().includes(searchQuery.toLowerCase());
+      const q = searchQuery.toLowerCase();
+      const matchesSearch = c.name.toLowerCase().includes(q) || 
+                            c.category.toLowerCase().includes(q) ||
+                            (c.country && c.country.toLowerCase().includes(q)) ||
+                            (c.language && c.language.toLowerCase().includes(q));
+      
+      const matchesPlaylist = selectedPlaylistId === "all" || c.playlistId === selectedPlaylistId;
       const matchesCategory = selectedCategory === "All" || c.category === selectedCategory;
-      return matchesSearch && matchesCategory;
+      const matchesCountry = selectedCountry === "All" || c.country === selectedCountry;
+      const matchesLanguage = selectedLanguage === "All" || c.language === selectedLanguage;
+      
+      // Strict stream availability filter: if checked offline, hide it!
+      const isOffline = streamStatuses[c.id] === "offline";
+
+      return matchesSearch && matchesPlaylist && matchesCategory && matchesCountry && matchesLanguage && !isOffline;
     });
-  }, [channels, searchQuery, selectedCategory]);
+  }, [channels, searchQuery, selectedPlaylistId, selectedCategory, selectedCountry, selectedLanguage, streamStatuses]);
+
+  // Infinite scrolling trigger
+  useEffect(() => {
+    const handleScroll = () => {
+      if (typeof window === "undefined") return;
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 150) {
+        setVisibleCount(prev => Math.min(prev + 12, filteredChannels.length));
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [filteredChannels.length]);
+
+  // Reset page pagination on any parameter changes
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVisibleCount(16);
+  }, [searchQuery, selectedPlaylistId, selectedCategory, selectedCountry, selectedLanguage]);
+
+  // Extract unique criteria dynamically from the current channel list
+  const uniqueCategories = React.useMemo(() => {
+    const list = Array.from(new Set(channels.map(c => c.category))).sort();
+    return ["All", ...list];
+  }, [channels]);
+
+  const uniqueCountries = React.useMemo(() => {
+    const list = Array.from(new Set(channels.map(c => c.country || "Global"))).sort();
+    return ["All", ...list];
+  }, [channels]);
+
+  const uniqueLanguages = React.useMemo(() => {
+    const list = Array.from(new Set(channels.map(c => c.language || "Unknown"))).sort();
+    return ["All", ...list];
+  }, [channels]);
 
   // Find a highly engaging featured channel as the Hero
   const featuredChannel = React.useMemo(() => {
@@ -386,7 +442,7 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
         ))}
       </section>
 
-      {/* 4. CHANNELS FEED GRID */}
+      {/* 4. CHANNELS FEED GRID WITH MULTI-FILTER DECK */}
       <section className="space-y-4" id="all-channels-section">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center space-x-2">
@@ -415,40 +471,128 @@ export default function DashboardView({ onNavigate }: DashboardViewProps) {
           </div>
         </div>
 
+        {/* BENTO FILTER CONTROLS DECK */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 bg-zinc-950/40 border border-white/5 rounded-2xl p-4.5 shadow-xl backdrop-blur" id="filter-deck">
+          {/* Playlist selector */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">Playlist Stream Source</label>
+            <select
+              value={selectedPlaylistId}
+              onChange={(e) => setSelectedPlaylistId(e.target.value)}
+              className="bg-[#16161A] border border-white/10 rounded-xl px-3 py-2 text-xs text-zinc-200 outline-none focus:border-indigo-500/50 transition cursor-pointer"
+            >
+              <option value="all">All Channels (Merged)</option>
+              <option value="default">Nexora Premium Hub (Built-in)</option>
+              <option value="automated">Automated Playlist Hub</option>
+              {playlists.filter(p => p.id !== "default" && p.id !== "automated").map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Category selector */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">Category Filter</label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="bg-[#16161A] border border-white/10 rounded-xl px-3 py-2 text-xs text-zinc-200 outline-none focus:border-indigo-500/50 transition cursor-pointer"
+            >
+              {uniqueCategories.map(cat => (
+                <option key={cat} value={cat}>{cat === "All" ? "All Categories" : cat}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Country selector */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">Country Origin</label>
+            <select
+              value={selectedCountry}
+              onChange={(e) => setSelectedCountry(e.target.value)}
+              className="bg-[#16161A] border border-white/10 rounded-xl px-3 py-2 text-xs text-zinc-200 outline-none focus:border-indigo-500/50 transition cursor-pointer"
+            >
+              {uniqueCountries.map(country => (
+                <option key={country} value={country}>{country === "All" ? "All Countries" : country}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Language selector */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">Language Filter</label>
+            <select
+              value={selectedLanguage}
+              onChange={(e) => setSelectedLanguage(e.target.value)}
+              className="bg-[#16161A] border border-white/10 rounded-xl px-3 py-2 text-xs text-zinc-200 outline-none focus:border-indigo-500/50 transition cursor-pointer"
+            >
+              {uniqueLanguages.map(lang => (
+                <option key={lang} value={lang}>{lang === "All" ? "All Languages" : lang}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Loading / Refreshing State Skeleton */}
+        {isRefreshingAutomated && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5 pt-2" id="skeleton-grid">
+            {Array.from({ length: 8 }).map((_, idx) => (
+              <div key={idx} className="bg-[#111114] border border-white/5 rounded-2xl p-3 space-y-4 animate-pulse">
+                <div className="aspect-video rounded-xl bg-zinc-900" />
+                <div className="h-4 bg-zinc-900 rounded w-2/3" />
+                <div className="h-3 bg-[#1A1A1F] rounded w-1/2" />
+                <div className="flex justify-between items-center pt-2">
+                  <div className="h-3 bg-zinc-900 rounded w-1/4" />
+                  <div className="h-3 bg-[#1A1A1F] rounded w-1/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Empty State */}
-        {filteredChannels.length === 0 && (
+        {!isRefreshingAutomated && filteredChannels.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 border border-zinc-900 bg-zinc-950/20 rounded-2xl text-center p-6" id="empty-channels-state">
-            <Tv className="h-12 w-12 text-zinc-800 mb-3" />
-            <h3 className="text-sm font-semibold text-zinc-400">No channels found</h3>
+            <Tv className="h-12 w-12 text-zinc-800 mb-3 animate-pulse" />
+            <h3 className="text-sm font-semibold text-zinc-400">No active channels found</h3>
             <p className="text-zinc-600 text-xs mt-1 max-w-sm">
-              We couldn&apos;t find any stream matching &quot;{searchQuery}&quot; under &quot;{selectedCategory}&quot;. Add more playlists or clear your query parameters.
+              We couldn&apos;t find any stream matching your filter criteria. The channels might be offline or undergoing automatic verification.
             </p>
-            {searchQuery && (
+            {(searchQuery || selectedCategory !== "All" || selectedCountry !== "All" || selectedLanguage !== "All" || selectedPlaylistId !== "all") && (
               <button 
-                onClick={() => setSearchQuery("")}
+                onClick={() => {
+                  setSearchQuery("");
+                  setSelectedCategory("All");
+                  setSelectedCountry("All");
+                  setSelectedLanguage("All");
+                  setSelectedPlaylistId("all");
+                }}
                 className="mt-4 px-3.5 py-1.5 rounded-lg border border-zinc-800 bg-zinc-950 text-xs text-zinc-400 hover:text-white transition"
               >
-                Clear Search
+                Reset Filter Settings
               </button>
             )}
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5" id="channels-grid">
-          {filteredChannels.map(chan => (
-            <ChannelCard
-              key={chan.id}
-              chan={chan}
-              theme={theme}
-              favorites={favorites}
-              toggleFavorite={toggleFavorite}
-              handleWatch={handleWatch}
-              streamStatuses={streamStatuses}
-              checkChannelStatus={checkChannelStatus}
-              pingPermission={settings.pingPermission}
-            />
-          ))}
-        </div>
+        {/* Channels Grid with Infinite Scroll & Lazy Loading */}
+        {!isRefreshingAutomated && filteredChannels.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5" id="channels-grid">
+            {filteredChannels.slice(0, visibleCount).map(chan => (
+              <ChannelCard
+                key={chan.id}
+                chan={chan}
+                theme={theme}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                handleWatch={handleWatch}
+                streamStatuses={streamStatuses}
+                checkChannelStatus={checkChannelStatus}
+                pingPermission={settings.pingPermission}
+              />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Real-time Stream Checking Consent Dialog */}

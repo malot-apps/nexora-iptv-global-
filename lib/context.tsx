@@ -37,6 +37,13 @@ interface AppContextType {
   setSearchQuery: (query: string) => void;
   updateSettings: (newSettings: Partial<Settings>) => void;
   checkChannelStatus: (channelId: string, url: string) => Promise<void>;
+  
+  // Automated Playlist Engine
+  automatedUrls: string[];
+  addAutomatedUrl: (url: string) => Promise<void>;
+  deleteAutomatedUrl: (url: string) => Promise<void>;
+  refreshAutomatedPlaylists: (urls?: string[], force?: boolean) => Promise<void>;
+  isRefreshingAutomated: boolean;
 }
 
 const defaultSettings: Settings = {
@@ -99,6 +106,23 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     return [];
   });
+
+  const [automatedUrls, setAutomatedUrls] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("nexora_automated_urls");
+        if (stored) return JSON.parse(stored);
+      } catch (e) {
+        console.error("Failed to parse automated URLs:", e);
+      }
+    }
+    return [
+      "https://iptv-org.github.io/iptv/categories/sports.m3u",
+      "https://iptv-org.github.io/iptv/languages/ben.m3u"
+    ];
+  });
+
+  const [isRefreshingAutomated, setIsRefreshingAutomated] = useState<boolean>(false);
 
   const [activeChannel, setActiveChannelInternal] = useState<IPTVChannel | null>(() => {
     const list = (() => {
@@ -260,6 +284,87 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("nexora_settings", JSON.stringify(updated));
   };
 
+  const refreshAutomatedPlaylists = async (urlsToFetch?: string[], force?: boolean) => {
+    const urls = urlsToFetch || automatedUrls;
+    if (urls.length === 0) {
+      const updatedPlaylists = playlists.filter(p => p.id !== "automated");
+      const updatedChannels = channels.filter(c => c.playlistId !== "automated");
+      setPlaylists(updatedPlaylists);
+      setChannels(updatedChannels);
+      localStorage.setItem("nexora_playlists", JSON.stringify(updatedPlaylists));
+      localStorage.setItem("nexora_channels", JSON.stringify(updatedChannels));
+      return;
+    }
+
+    setIsRefreshingAutomated(true);
+    try {
+      const res = await fetch("/api/playlist/fetch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ urls }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch automated playlists");
+      }
+
+      const data = await res.json();
+      const parsedChannels: IPTVChannel[] = data.channels || [];
+
+      const updatedPlaylists = playlists.filter(p => p.id !== "automated");
+      const updatedChannels = channels.filter(c => c.playlistId !== "automated");
+
+      const automatedPlaylist: IPTVPlaylist = {
+        id: "automated",
+        name: "Automated Aggregated Feed",
+        type: "m3u",
+        channelCount: parsedChannels.length,
+        importedAt: new Date().toISOString(),
+      };
+
+      const finalPlaylists = [...updatedPlaylists, automatedPlaylist];
+      const finalChannels = [...updatedChannels, ...parsedChannels];
+
+      setPlaylists(finalPlaylists);
+      setChannels(finalChannels);
+
+      localStorage.setItem("nexora_playlists", JSON.stringify(finalPlaylists));
+      localStorage.setItem("nexora_channels", JSON.stringify(finalChannels));
+    } catch (err) {
+      console.error("Failed to refresh automated playlists:", err);
+    } finally {
+      setIsRefreshingAutomated(false);
+    }
+  };
+
+  const addAutomatedUrl = async (url: string) => {
+    if (!url || automatedUrls.includes(url)) return;
+    const updated = [...automatedUrls, url];
+    setAutomatedUrls(updated);
+    localStorage.setItem("nexora_automated_urls", JSON.stringify(updated));
+    await refreshAutomatedPlaylists(updated, true);
+  };
+
+  const deleteAutomatedUrl = async (url: string) => {
+    const updated = automatedUrls.filter(u => u !== url);
+    setAutomatedUrls(updated);
+    localStorage.setItem("nexora_automated_urls", JSON.stringify(updated));
+    await refreshAutomatedPlaylists(updated, true);
+  };
+
+  // Auto-refresh on mount
+  useEffect(() => {
+    const autoRefresh = () => {
+      refreshAutomatedPlaylists();
+    };
+    // Defer slightly to not block initial render
+    const timer = setTimeout(autoRefresh, 1500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <AppContext.Provider
       value={{
@@ -284,6 +389,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setSearchQuery,
         updateSettings,
         checkChannelStatus,
+        automatedUrls,
+        addAutomatedUrl,
+        deleteAutomatedUrl,
+        refreshAutomatedPlaylists,
+        isRefreshingAutomated,
       }}
     >
       {children}

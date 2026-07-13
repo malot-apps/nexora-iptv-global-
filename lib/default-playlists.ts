@@ -12,6 +12,7 @@ export interface IPTVChannel {
   isFeatured?: boolean;
   quality?: string;
   language?: string;
+  country?: string;
   views?: number;
   description?: string;
 }
